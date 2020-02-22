@@ -80,6 +80,9 @@ public:
   virtual void
   OnNack(shared_ptr<const lp::Nack> nack);
 
+  virtual void
+  ProactivelyDistributeData(shared_ptr<const Data> data);
+
 public:
   typedef void (*InterestTraceCallback)(shared_ptr<const Interest>, Ptr<App>, shared_ptr<Face>);
   typedef void (*DataTraceCallback)(shared_ptr<const Data>, Ptr<App>, shared_ptr<Face>);

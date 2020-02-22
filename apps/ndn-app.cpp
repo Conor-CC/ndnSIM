@@ -133,6 +133,12 @@ App::OnNack(shared_ptr<const lp::Nack> nack)
   m_receivedNacks(nack, this, m_face);
 }
 
+void
+App::ProactivelyDistributeData(shared_ptr<const Data> data) {
+  NS_LOG_FUNCTION(this << data);
+  m_transmittedDatas(data, this, m_face);
+}
+
 // Application Methods
 void
 App::StartApplication() // Called at time specified by Start
