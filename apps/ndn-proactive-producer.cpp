@@ -18,14 +18,18 @@
  **/
 
 #include "ndn-proactive-producer.hpp"
+#include "ns3/object.h"
 #include "ns3/log.h"
 #include "ns3/string.h"
 #include "ns3/uinteger.h"
 #include "ns3/packet.h"
 #include "ns3/simulator.h"
+#include "ns3/core-module.h"
+
 
 #include "model/ndn-l3-protocol.hpp"
 #include "helper/ndn-fib-helper.hpp"
+#include "NFD/daemon/fw/forwarder.hpp"
 
 #include <memory>
 
@@ -83,11 +87,9 @@ ProactiveProducer::StartApplication()
   NS_LOG_FUNCTION_NOARGS();
   App::StartApplication();
 
-  FibHelper::AddRoute(GetNode(), m_prefix, m_face, 0);
-
   //TODO: emmit data based on factors originally described in proposal
   //This scheduling of transmission is purely for testing purposes
-  Simulator::Schedule(Seconds(10), &ns3::ndn::ProactiveProducer::ProactivelyDistributeData, this);
+  Simulator::Schedule(Seconds(5), &ns3::ndn::ProactiveProducer::ProactivelyDistributeData, this);
 }
 
 void
@@ -100,37 +102,49 @@ ProactiveProducer::StopApplication()
 
 void
 ProactiveProducer::ProactivelyDistributeData() {
+  NS_LOG_UNCOND("ProactiveProducer::ProactivelyDistributeData()");
+
+  if (!m_active)
+    return;
+
+  shared_ptr<Interest> interest = std::make_shared<ndn::Interest>(m_prefix);
+  Ptr<UniformRandomVariable> rand = CreateObject<UniformRandomVariable>();
+  interest->setNonce(rand->GetValue(0, std::numeric_limits<uint32_t>::max()));
+  interest->setInterestLifetime(ndn::time::seconds(300));
+
   auto data = make_shared<Data>();
-  data->setName("proactiveDist");
+  data->setName(m_prefix);
   data->setFreshnessPeriod(::ndn::time::milliseconds(m_freshness.GetMilliSeconds()));
-
-  data->setContent(make_shared< ::ndn::Buffer>(m_virtualPayloadSize));
-
+  data->setContent(make_shared< ::ndn::Buffer>(100));
   Signature signature;
   SignatureInfo signatureInfo(static_cast< ::ndn::tlv::SignatureTypeValue>(255));
-
   if (m_keyLocator.size() > 0) {
     signatureInfo.setKeyLocator(m_keyLocator);
   }
-
   signature.setInfo(signatureInfo);
-  //TODO: investigate TLV stuff
   signature.setValue(::ndn::makeNonNegativeIntegerBlock(::ndn::tlv::SignatureValue, m_signature));
-
   data->setSignature(signature);
-
-  NS_LOG_INFO("node(" << GetNode()->GetId() << ") proactively distributing Data: " << data->getName());
-
   // to create real wire encoding
   data->wireEncode();
 
-  m_face->sendData(*data);
-  // m_appLink->onReceiveData(*data);
+  App::ProactivelyDistributeData(data); // tracing inside
+  NS_LOG_FUNCTION(this << data);
 
-
-  
+  GetNode()->GetObject<L3Protocol>()->getForwarder()->getCs().insert(*data, false);
+  bool criticalDataInCs = true;
+  if (criticalDataInCs) {
+    // Turns out, 258 is a local face! 257 is non local and therefore actually
+    // emits the data.
+    // TODO: Make a new out-bound, non-local face so we dont have to rely on face 257
+    // being a present
+    shared_ptr<Face> face = GetNode()->GetObject<L3Protocol>()->getFaceById(257);
+    face->getScope();
+    std::cout << face->getScope() << '\n';
+    // Kick-starts the distribution process. Should only be called if the data is definitely within
+    // this nodes content store
+    GetNode()->GetObject<L3Protocol>()->getForwarder()->startProcessInterest(*face, *interest);
+  }
 }
-
 
 
 } // namespace ndn
