@@ -63,7 +63,11 @@ ProactiveProducer::GetTypeId(void)
          MakeUintegerChecker<uint32_t>())
       .AddAttribute("KeyLocator",
                     "Name to be used for key locator.  If root, then key locator is not used",
-                    NameValue(), MakeNameAccessor(&ProactiveProducer::m_keyLocator), MakeNameChecker());
+                    NameValue(), MakeNameAccessor(&ProactiveProducer::m_keyLocator), MakeNameChecker())
+      .AddAttribute("PCDtime",
+                    "Defines when PCD will be triggered",
+                    TimeValue(Seconds(5)), MakeTimeAccessor(&ProactiveProducer::m_pcdTime),
+                    MakeTimeChecker());
   return tid;
 }
 

@@ -63,6 +63,7 @@ private:
   Name m_postfix;
   uint32_t m_virtualPayloadSize;
   Time m_freshness;
+  Time m_pcdTime;
 
   uint32_t m_signature;
   Name m_keyLocator;
