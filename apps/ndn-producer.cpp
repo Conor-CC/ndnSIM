@@ -23,6 +23,8 @@
 #include "ns3/uinteger.h"
 #include "ns3/packet.h"
 #include "ns3/simulator.h"
+#include "ns3/mobility-module.h"
+
 
 #include "model/ndn-l3-protocol.hpp"
 #include "helper/ndn-fib-helper.hpp"
@@ -63,7 +65,35 @@ Producer::GetTypeId(void)
          MakeUintegerChecker<uint32_t>())
       .AddAttribute("KeyLocator",
                     "Name to be used for key locator.  If root, then key locator is not used",
-                    NameValue(), MakeNameAccessor(&Producer::m_keyLocator), MakeNameChecker());
+                    NameValue(), MakeNameAccessor(&Producer::m_keyLocator), MakeNameChecker())
+      .AddAttribute("SimEnd",
+                    "Node is aware of the simulation end time",
+                    UintegerValue(0), MakeUintegerAccessor(&Producer::m_simEnd),
+                    MakeUintegerChecker<uint32_t>())
+      .AddAttribute("CTxStart",
+                    "Where PCD is triggered",
+                    UintegerValue(0), MakeUintegerAccessor(&Producer::m_contentTrigger_x_start),
+                    MakeUintegerChecker<uint32_t>())
+      .AddAttribute("CTxEnd",
+                    "Where PCD is no longer triggered",
+                    UintegerValue(0), MakeUintegerAccessor(&Producer::m_contentTrigger_x_end),
+                    MakeUintegerChecker<uint32_t>())
+      .AddAttribute("CTlStart",
+                    "When PCD can be triggered",
+                    UintegerValue(0), MakeUintegerAccessor(&Producer::m_contentTrigger_l_start),
+                    MakeUintegerChecker<uint32_t>())
+      .AddAttribute("CTlEnd",
+                    "When PCD can no longer be triggered",
+                    UintegerValue(0), MakeUintegerAccessor(&Producer::m_contentTrigger_l_end),
+                    MakeUintegerChecker<uint32_t>())
+      .AddAttribute("CTxSpeed",
+                    "If the content is mobile, update its position from the perspective of the node",
+                    UintegerValue(0), MakeUintegerAccessor(&Producer::m_contentTrigger_x_speed),
+                    MakeUintegerChecker<uint32_t>())
+      .AddAttribute("ProducerActivationPos",
+                    "Specifies where the producer can start behaving as normal. If PCD is enabled, preferably afterwards. Otherwise, equivalent to CTxStart",
+                    UintegerValue(0), MakeUintegerAccessor(&Producer::m_producerActivationPos),
+                    MakeUintegerChecker<uint32_t>());
   return tid;
 }
 
@@ -80,6 +110,7 @@ Producer::StartApplication()
   App::StartApplication();
 
   FibHelper::AddRoute(GetNode(), m_prefix, m_face, 0);
+  posChecker();
 }
 
 void
@@ -91,44 +122,73 @@ Producer::StopApplication()
 }
 
 void
+Producer::posChecker() {
+  for (uint32_t i = 1; i < m_simEnd; i++) {
+    Simulator::Schedule(Seconds(i), &Producer::posCheckerHelper, this);
+  }
+}
+
+void Producer::posCheckerHelper() {
+  // Keeps track of content trigger position, speed and lifetime
+  double current_x = GetNode()->GetObject<MobilityModel>()->GetPosition().x;
+  double error = 2.0;
+  // std::cout << "current_x=" << current_x << " m_contentTrigger_x_speed=" << m_contentTrigger_x_speed << " m_contentTrigger_x_start=" << m_contentTrigger_x_start << " m_contentTrigger_x_end=" << m_contentTrigger_x_end << '\n';
+  if (current_x >= (m_contentTrigger_x_start - error) && current_x < (m_contentTrigger_x_end + error)) {
+    //Check if contentTrigger is alive
+    double currentTime = Simulator::Now().GetSeconds();
+    if (m_contentTrigger_l_start <= currentTime && m_contentTrigger_l_end > currentTime) {
+      m_contentDiscovered = true;
+    } else {
+      m_contentDiscovered = false;
+    }
+  } else {
+    m_contentDiscovered = false;
+  }
+  m_contentTrigger_x_start = m_contentTrigger_x_start + m_contentTrigger_x_speed;
+}
+
+void
 Producer::OnInterest(shared_ptr<const Interest> interest)
 {
-  App::OnInterest(interest); // tracing inside
+  if (m_contentDiscovered) {
+      NS_LOG_UNCOND("\nMUUUUUPPPPPPPP");
+      App::OnInterest(interest); // tracing inside
 
-  NS_LOG_FUNCTION(this << interest);
+      NS_LOG_FUNCTION(this << interest);
 
-  if (!m_active)
-    return;
+      if (!m_active)
+        return;
 
-  Name dataName(interest->getName());
-  // dataName.append(m_postfix);
-  // dataName.appendVersion();
+      Name dataName(interest->getName());
+      // dataName.append(m_postfix);
+      // dataName.appendVersion();
 
-  auto data = make_shared<Data>();
-  data->setName(dataName);
-  data->setFreshnessPeriod(::ndn::time::milliseconds(m_freshness.GetMilliSeconds()));
+      auto data = make_shared<Data>();
+      data->setName(dataName);
+      data->setFreshnessPeriod(::ndn::time::milliseconds(m_freshness.GetMilliSeconds()));
 
-  data->setContent(make_shared< ::ndn::Buffer>(m_virtualPayloadSize));
+      data->setContent(make_shared< ::ndn::Buffer>(m_virtualPayloadSize));
 
-  Signature signature;
-  SignatureInfo signatureInfo(static_cast< ::ndn::tlv::SignatureTypeValue>(255));
+      Signature signature;
+      SignatureInfo signatureInfo(static_cast< ::ndn::tlv::SignatureTypeValue>(255));
 
-  if (m_keyLocator.size() > 0) {
-    signatureInfo.setKeyLocator(m_keyLocator);
+      if (m_keyLocator.size() > 0) {
+        signatureInfo.setKeyLocator(m_keyLocator);
+      }
+
+      signature.setInfo(signatureInfo);
+      signature.setValue(::ndn::makeNonNegativeIntegerBlock(::ndn::tlv::SignatureValue, m_signature));
+
+      data->setSignature(signature);
+
+      NS_LOG_INFO("node(" << GetNode()->GetId() << ") responding with Data: " << data->getName());
+
+      // to create real wire encoding
+      data->wireEncode();
+
+      m_transmittedDatas(data, this, m_face);
+      m_appLink->onReceiveData(*data);
   }
-
-  signature.setInfo(signatureInfo);
-  signature.setValue(::ndn::makeNonNegativeIntegerBlock(::ndn::tlv::SignatureValue, m_signature));
-
-  data->setSignature(signature);
-
-  NS_LOG_INFO("node(" << GetNode()->GetId() << ") responding with Data: " << data->getName());
-
-  // to create real wire encoding
-  data->wireEncode();
-
-  m_transmittedDatas(data, this, m_face);
-  m_appLink->onReceiveData(*data);
 }
 
 
