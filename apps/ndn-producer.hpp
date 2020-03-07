@@ -47,6 +47,8 @@ public:
 
   Producer();
 
+  virtual void
+  posChecker();
   // inherited from NdnApp
   virtual void
   OnInterest(shared_ptr<const Interest> interest);
@@ -60,13 +62,24 @@ protected:
   StopApplication(); // Called at time specified by Stop
 
 private:
+  virtual void
+  posCheckerHelper();
+
   Name m_prefix;
   Name m_postfix;
   uint32_t m_virtualPayloadSize;
+  uint32_t m_simEnd;
+  uint32_t m_contentTrigger_x_start;
+  uint32_t m_contentTrigger_x_end;
+  uint32_t m_contentTrigger_l_start;
+  uint32_t m_contentTrigger_l_end;
+  uint32_t m_contentTrigger_x_speed;
   Time m_freshness;
+  uint32_t m_producerActivationPos;
 
   uint32_t m_signature;
   Name m_keyLocator;
+  bool m_contentDiscovered = false;
 };
 
 } // namespace ndn
