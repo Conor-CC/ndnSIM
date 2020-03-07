@@ -48,6 +48,9 @@ public:
   ProactiveProducer();
 
   virtual void
+  posChecker();
+
+  virtual void
   ProactivelyDistributeData();
 
 protected:
@@ -59,14 +62,24 @@ protected:
   StopApplication(); // Called at time specified by Stop
 
 private:
+  virtual void
+  posCheckerHelper();
+
   Name m_prefix;
   Name m_postfix;
   uint32_t m_virtualPayloadSize;
+  uint32_t m_simEnd;
+  uint32_t m_contentTrigger_x_start;
+  uint32_t m_contentTrigger_x_end;
+  uint32_t m_contentTrigger_l_start;
+  uint32_t m_contentTrigger_l_end;
+  uint32_t m_contentTrigger_x_speed;
   Time m_freshness;
-  Time m_pcdTime;
 
   uint32_t m_signature;
   Name m_keyLocator;
+  bool canDist = false;
+  bool hasDist = false;
 };
 
 } // namespace ndn
