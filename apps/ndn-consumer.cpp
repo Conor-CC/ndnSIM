@@ -221,8 +221,14 @@ Consumer::OnData(shared_ptr<const Data> data)
 
   // NS_LOG_INFO ("Received content object: " << boost::cref(*data));
 
+  uint32_t seq;
   // This could be a problem......
-  uint32_t seq = data->getName().at(-1).toSequenceNumber();
+  try {
+    seq = data->getName().at(-1).toSequenceNumber();
+  } catch (boost::exception_detail::clone_impl<boost::exception_detail::error_info_injector<ndn::name::Component::Error> > e) {
+    // seq = m_seq;
+  }
+  NS_LOG_UNCOND("< Consumer receiving data " << data->getName());
   NS_LOG_INFO("< DATA for " << seq);
 
   int hopCount = 0;
