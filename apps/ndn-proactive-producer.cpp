@@ -25,11 +25,14 @@
 #include "ns3/packet.h"
 #include "ns3/simulator.h"
 #include "ns3/core-module.h"
+#include "ns3/mobility-module.h"
+
 
 
 #include "model/ndn-l3-protocol.hpp"
 #include "helper/ndn-fib-helper.hpp"
 #include "NFD/daemon/fw/forwarder.hpp"
+#include "NFD/daemon/table/cs.hpp"
 
 #include <memory>
 
@@ -68,10 +71,30 @@ ProactiveProducer::GetTypeId(void)
       .AddAttribute("KeyLocator",
                     "Name to be used for key locator.  If root, then key locator is not used",
                     NameValue(), MakeNameAccessor(&ProactiveProducer::m_keyLocator), MakeNameChecker())
-      .AddAttribute("PCDtime",
-                    "Defines when PCD will be triggered",
-                    TimeValue(Seconds(5)), MakeTimeAccessor(&ProactiveProducer::m_pcdTime),
-                    MakeTimeChecker());
+      .AddAttribute("SimEnd",
+                    "Node is aware of the simulation end time",
+                    UintegerValue(0), MakeUintegerAccessor(&ProactiveProducer::m_simEnd),
+                    MakeUintegerChecker<uint32_t>())
+      .AddAttribute("CTxStart",
+                    "Where PCD is triggered",
+                    UintegerValue(0), MakeUintegerAccessor(&ProactiveProducer::m_contentTrigger_x_start),
+                    MakeUintegerChecker<uint32_t>())
+      .AddAttribute("CTxEnd",
+                    "Where PCD is no longer triggered",
+                    UintegerValue(0), MakeUintegerAccessor(&ProactiveProducer::m_contentTrigger_x_end),
+                    MakeUintegerChecker<uint32_t>())
+      .AddAttribute("CTlStart",
+                    "When PCD can be triggered",
+                    UintegerValue(0), MakeUintegerAccessor(&ProactiveProducer::m_contentTrigger_l_start),
+                    MakeUintegerChecker<uint32_t>())
+      .AddAttribute("CTlEnd",
+                    "When PCD can no longer be triggered",
+                    UintegerValue(0), MakeUintegerAccessor(&ProactiveProducer::m_contentTrigger_l_end),
+                    MakeUintegerChecker<uint32_t>())
+      .AddAttribute("CTxSpeed",
+                    "If the content is mobile, update its position from the perspective of the node",
+                    UintegerValue(0), MakeUintegerAccessor(&ProactiveProducer::m_contentTrigger_x_speed),
+                    MakeUintegerChecker<uint32_t>());
   return tid;
 }
 
@@ -86,10 +109,9 @@ ProactiveProducer::StartApplication()
 {
   NS_LOG_FUNCTION_NOARGS();
   App::StartApplication();
-
   //TODO: emmit data based on factors originally described in proposal
   //This scheduling of transmission is purely for testing purposes
-  Simulator::Schedule(Seconds(5), &ns3::ndn::ProactiveProducer::ProactivelyDistributeData, this);
+  ProactiveProducer::posChecker();
 }
 
 void
@@ -100,8 +122,35 @@ ProactiveProducer::StopApplication()
   App::StopApplication();
 }
 
+void ProactiveProducer::posChecker() {
+  for (uint32_t i = 1; i < m_simEnd; i++) {
+    Simulator::Schedule(Seconds(i), &ProactiveProducer::posCheckerHelper, this);
+  }
+}
+
+void ProactiveProducer::posCheckerHelper() {
+  // Keeps track of content trigger position, speed and lifetime
+  double current_x = GetNode()->GetObject<MobilityModel>()->GetPosition().x;
+  double error = 2.0;
+  if (current_x >= (m_contentTrigger_x_start - error) && current_x < (m_contentTrigger_x_end + error)) {
+    //Check if contentTrigger is alive
+    std::cout << "TEST" << '\n';
+    double currentTime = Simulator::Now().GetSeconds();
+    if (m_contentTrigger_l_start <= currentTime && m_contentTrigger_l_end > currentTime) {
+      canDist = true;
+    }
+  }
+  if (canDist && !hasDist) {
+    ProactivelyDistributeData();
+    hasDist = true;
+  }
+  m_contentTrigger_x_start = m_contentTrigger_x_start + m_contentTrigger_x_speed;
+}
+
 void
 ProactiveProducer::ProactivelyDistributeData() {
+  std::cout << "AAAAAAAAAAAAAA: " << GetNode()->GetObject<MobilityModel>()->GetPosition().x << std::endl;
+
   NS_LOG_UNCOND("ProactiveProducer::ProactivelyDistributeData()");
 
   if (!m_active)
@@ -113,9 +162,13 @@ ProactiveProducer::ProactivelyDistributeData() {
   interest->setInterestLifetime(ndn::time::seconds(300));
 
   auto data = make_shared<Data>();
+
+  shared_ptr<Name> nameWithSequence = make_shared<Name>(m_prefix);
+  nameWithSequence->appendSequenceNumber(0);
   data->setName(m_prefix);
+
   data->setFreshnessPeriod(::ndn::time::milliseconds(m_freshness.GetMilliSeconds()));
-  data->setContent(make_shared< ::ndn::Buffer>(100));
+  data->setContent(make_shared< ::ndn::Buffer>(m_virtualPayloadSize));
   Signature signature;
   SignatureInfo signatureInfo(static_cast< ::ndn::tlv::SignatureTypeValue>(255));
   if (m_keyLocator.size() > 0) {
@@ -130,22 +183,23 @@ ProactiveProducer::ProactivelyDistributeData() {
   App::ProactivelyDistributeData(data); // tracing inside
   NS_LOG_FUNCTION(this << data);
 
-  GetNode()->GetObject<L3Protocol>()->getForwarder()->getCs().insert(*data, false);
-  bool criticalDataInCs = true;
-  if (criticalDataInCs) {
-    // Turns out, 258 is a local face! 257 is non local and therefore actually
-    // emits the data.
-    // TODO: Make a new out-bound, non-local face so we dont have to rely on face 257
-    // being a present
-    shared_ptr<Face> face = GetNode()->GetObject<L3Protocol>()->getFaceById(257);
-    face->getScope();
-    std::cout << face->getScope() << '\n';
-    // Kick-starts the distribution process. Should only be called if the data is definitely within
-    // this nodes content store
-    GetNode()->GetObject<L3Protocol>()->getForwarder()->startProcessInterest(*face, *interest);
-  }
-}
+  nfd::cs::Cs& contentStore = GetNode()->GetObject<L3Protocol>()->getForwarder()->getCs();//.insert(*data, false);
+  contentStore.insert(*data, false);
+  // Making sure proactive data to distribute is in CS to avoid unexpected behaviour
+  // Turns out, 258 is a local face! 257 is non local and therefore actually
+  // emits the data. Can detect wheter or not a face is local or non-local with
+  // the non-static getScope() function in the Face class
+  // TODO: Make a new out-bound, non-local face so we dont have to rely on face 257
+  // being a present
+  shared_ptr<Face> face = GetNode()->GetObject<L3Protocol>()->getFaceById(257);
+  face->getScope();
+  std::cout << face->getScope() << '\n';
+  // Kick-starts the distribution process. Should only be called if the data is definitely within
+  // this nodes content store
+  GetNode()->GetObject<L3Protocol>()->getForwarder()->startProcessInterest(*face, *interest);
 
+  NS_LOG_UNCOND("Emmiting PCD " << *data);
+}
 
 } // namespace ndn
 } // namespace ns3
