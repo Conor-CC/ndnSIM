@@ -28,6 +28,13 @@
 #include "ns3/uinteger.h"
 #include "ns3/integer.h"
 #include "ns3/double.h"
+#include "ns3/mobility-module.h"
+
+#include "model/ndn-l3-protocol.hpp"
+#include "helper/ndn-fib-helper.hpp"
+#include "NFD/daemon/face/face.hpp"
+#include "NFD/daemon/fw/forwarder.hpp"
+#include "NFD/daemon/table/cs.hpp"
 
 #include "utils/ndn-ns3-packet-tag.hpp"
 #include "utils/ndn-rtt-mean-deviation.hpp"
@@ -36,6 +43,8 @@
 
 #include <boost/lexical_cast.hpp>
 #include <boost/ref.hpp>
+#include <iostream>
+#include <fstream>
 
 NS_LOG_COMPONENT_DEFINE("ndn.Consumer");
 
@@ -64,12 +73,28 @@ Consumer::GetTypeId(void)
                     StringValue("50ms"),
                     MakeTimeAccessor(&Consumer::GetRetxTimer, &Consumer::SetRetxTimer),
                     MakeTimeChecker())
-
+      .AddAttribute("SimEnd",
+                    "Node is aware of the simulation end time",
+                    UintegerValue(0), MakeUintegerAccessor(&Consumer::m_simEnd),
+                    MakeUintegerChecker<uint32_t>())
+      .AddAttribute("CTxStart",
+                    "Where PCD is triggered",
+                    UintegerValue(0), MakeUintegerAccessor(&Consumer::m_contentTrigger_x_start),
+                    MakeUintegerChecker<uint32_t>())
+      .AddAttribute("CTxEnd",
+                    "Where PCD is no longer triggered",
+                    UintegerValue(0), MakeUintegerAccessor(&Consumer::m_contentTrigger_x_end),
+                    MakeUintegerChecker<uint32_t>())
+      .AddAttribute("CTxSpeed",
+                    "If the content is mobile, update its position from the perspective of the node",
+                    UintegerValue(0), MakeUintegerAccessor(&Consumer::m_contentTrigger_x_speed),
+                    MakeUintegerChecker<uint32_t>())
+      .AddAttribute("AwarenessLoggingDir", "Where awareness traces our outputted", StringValue("./"),
+                    MakeStringAccessor(&Consumer::m_awarenessOutputDir), MakeStringChecker())
       .AddTraceSource("LastRetransmittedInterestDataDelay",
                       "Delay between last retransmitted Interest and received Data",
                       MakeTraceSourceAccessor(&Consumer::m_lastRetransmittedInterestDataDelay),
                       "ns3::ndn::Consumer::LastRetransmittedInterestDataDelayCallback")
-
       .AddTraceSource("FirstInterestDataDelay",
                       "Delay between first transmitted Interest and received Data",
                       MakeTraceSourceAccessor(&Consumer::m_firstInterestDataDelay),
@@ -141,7 +166,72 @@ Consumer::StartApplication() // Called at time specified by Start
   App::StartApplication();
 
   ScheduleNextPacket();
+
+  UtilityScheduler();
 }
+
+void Consumer::UtilityScheduler() {
+  for (uint32_t i = 1; i < m_simEnd; i++) {
+    Simulator::Schedule(Seconds(i), &Consumer::UtilityLoop, this);
+    if (i == (m_simEnd - 1)) {
+        Simulator::Schedule(Seconds(i), &Consumer::PrintAwarenessStats, this);
+    }
+  }
+}
+
+void Consumer::UtilityLoop() {
+  double current_x = GetNode()->GetObject<MobilityModel>()->GetPosition().x;
+  if (!m_aware) {
+      // Check CS for data prefix matching /criticalData
+      bool matching = false;
+      nfd::cs::Cs& contentStore = GetNode()->GetObject<L3Protocol>()->getForwarder()->getCs();
+
+      nfd::cs::Cs::const_iterator iter;
+      for (iter = contentStore.begin(); iter != contentStore.end(); iter++) {
+          if (iter->getName().equals("/criticalData/test")) {
+              matching = true;
+          }
+      }
+
+      if (matching) {
+          m_aware = true;
+          //Get location of node, mark distance from content
+          double content_x = (m_contentTrigger_x_start + m_contentTrigger_x_end) / 2;
+          m_awarenessDistance = content_x - current_x; //if positive, before content. Otherwise after.
+          double current_x_speed = 100.0;//GetNode()->GetObject<MobilityModel>()->GetVelocity().x;//(current_x - m_last_x); // No division here as this measurement is taken once every second.
+          IsNodeSafelyAware(current_x_speed) ? (m_safelyInformed = true) : (m_safelyInformed = false);
+          m_awarenessTime = Simulator::Now().GetSeconds();
+      }
+  }
+  m_contentTrigger_x_start = m_contentTrigger_x_start + m_contentTrigger_x_speed;
+  m_contentTrigger_x_end = m_contentTrigger_x_end + m_contentTrigger_x_speed;
+}
+
+bool
+Consumer::IsNodeSafelyAware(double nodeSpeed) {
+  double perceptionDistance = (0.278 * 1.5) * nodeSpeed;
+  double speedSquared = nodeSpeed * nodeSpeed;
+  double brakingDistance = speedSquared / (254 * 0.7);
+  double totalDistanceToBrake = perceptionDistance + brakingDistance;
+  return (totalDistanceToBrake <= m_awarenessDistance);
+}
+
+void
+Consumer::PrintAwarenessStats() {
+  std::cout << "Node " << GetNode()->GetId() << ": m_awarenessDistance: " << m_awarenessDistance << '\n';
+  std::string traceOutput = std::getenv("NS3_TRACE_OUTPUTS");
+  std::string awarenessTraceOutput = m_awarenessOutputDir + "/awareness-trace.txt";
+  std::ofstream awarenessTraceOutputFile;
+  awarenessTraceOutputFile.open(awarenessTraceOutput.c_str(), std::ios_base::app);
+  if (m_awarenessDistance < -100) {
+      m_aware = false;
+  }
+  awarenessTraceOutputFile << GetNode()->GetId() << "  " << m_awarenessDistance
+                           << "  " << m_aware << "  " << m_awarenessTime
+                           << "  " << m_safelyInformed << std::endl;
+  awarenessTraceOutputFile.close();
+}
+
 
 void
 Consumer::StopApplication() // Called at time specified by Stop
@@ -153,6 +243,7 @@ Consumer::StopApplication() // Called at time specified by Stop
 
   // cleanup base stuff
   App::StopApplication();
+
 }
 
 void
@@ -201,7 +292,7 @@ Consumer::SendPacket()
 
   m_transmittedInterests(interest, this, m_face);
   m_appLink->onReceiveInterest(*interest);
-
+  // NS_LOG_UNCOND("Emmiting Interest");
   ScheduleNextPacket();
 }
 
@@ -212,6 +303,7 @@ Consumer::SendPacket()
 void
 Consumer::OnData(shared_ptr<const Data> data)
 {
+  // NS_LOG_UNCOND("CONSUMER GOT DATA");
   if (!m_active)
     return;
 
@@ -228,7 +320,7 @@ Consumer::OnData(shared_ptr<const Data> data)
   } catch (boost::exception_detail::clone_impl<boost::exception_detail::error_info_injector<ndn::name::Component::Error> > e) {
     // seq = m_seq;
   }
-  NS_LOG_UNCOND("< Consumer receiving data " << data->getName());
+  // NS_LOG_UNCOND("< Consumer receiving data " << data->getName());
   NS_LOG_INFO("< DATA for " << seq);
 
   int hopCount = 0;
@@ -298,6 +390,7 @@ Consumer::WillSendOutInterest(uint32_t sequenceNumber)
 
   m_rtt->SentSeq(SequenceNumber32(sequenceNumber), 1);
 }
+
 
 } // namespace ndn
 } // namespace ns3

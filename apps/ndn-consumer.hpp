@@ -96,7 +96,21 @@ public:
   typedef void (*LastRetransmittedInterestDataDelayCallback)(Ptr<App> app, uint32_t seqno, Time delay, int32_t hopCount);
   typedef void (*FirstInterestDataDelayCallback)(Ptr<App> app, uint32_t seqno, Time delay, uint32_t retxCount, int32_t hopCount);
 
+private:
+  virtual void
+  UtilityScheduler();
+
+  virtual void
+  UtilityLoop();
+
+  virtual void
+  PrintAwarenessStats();
+
+  virtual bool
+  IsNodeSafelyAware(double nodeSpeed);
+
 protected:
+
   // from App
   virtual void
   StartApplication();
@@ -133,6 +147,17 @@ protected:
 
 protected:
   Ptr<UniformRandomVariable> m_rand; ///< @brief nonce generator
+  std::string m_awarenessOutputDir;
+
+  bool m_aware = false;
+  bool m_safelyInformed = false;
+  double m_last_x;
+  double m_awarenessTime;
+  int32_t m_awarenessDistance = 0;
+  uint32_t m_simEnd;
+  uint32_t m_contentTrigger_x_start;
+  uint32_t m_contentTrigger_x_end;
+  uint32_t m_contentTrigger_x_speed;
 
   uint32_t m_seq;      ///< @brief currently requested sequence number
   uint32_t m_seqMax;   ///< @brief maximum number of sequence number
