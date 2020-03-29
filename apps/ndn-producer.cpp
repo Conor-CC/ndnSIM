@@ -16,11 +16,12 @@
  * You should have received a copy of the GNU General Public License along with
  * ndnSIM, e.g., in COPYING.md file.  If not, see <http://www.gnu.org/licenses/>.
  **/
-
 #include "ndn-producer.hpp"
 #include "ns3/log.h"
 #include "ns3/string.h"
 #include "ns3/uinteger.h"
+#include "ns3/boolean.h"
+#include "ns3/global-value.h"
 #include "ns3/packet.h"
 #include "ns3/simulator.h"
 #include "ns3/mobility-module.h"
@@ -28,8 +29,11 @@
 
 #include "model/ndn-l3-protocol.hpp"
 #include "helper/ndn-fib-helper.hpp"
+#include "NFD/daemon/fw/forwarder.hpp"
+#include "NFD/daemon/table/cs.hpp"
 
 #include <memory>
+#include "globals.hpp"
 
 NS_LOG_COMPONENT_DEFINE("ndn.Producer");
 
@@ -90,11 +94,11 @@ Producer::GetTypeId(void)
                     "If the content is mobile, update its position from the perspective of the node",
                     UintegerValue(0), MakeUintegerAccessor(&Producer::m_contentTrigger_x_speed),
                     MakeUintegerChecker<uint32_t>())
-      .AddAttribute("ProducerActivationPos",
-                    "Specifies where the producer can start behaving as normal. If PCD is enabled, preferably afterwards. Otherwise, equivalent to CTxStart",
-                    UintegerValue(0), MakeUintegerAccessor(&Producer::m_producerActivationPos),
-                    MakeUintegerChecker<uint32_t>());
-  return tid;
+      .AddAttribute("IsRSU",
+                    "Id This Producer an RSU",
+                    BooleanValue(0), MakeBooleanAccessor(&Producer::m_isRSU),
+                    MakeBooleanChecker());
+      return tid;
 }
 
 Producer::Producer()
@@ -110,7 +114,8 @@ Producer::StartApplication()
   App::StartApplication();
 
   FibHelper::AddRoute(GetNode(), m_prefix, m_face, 0);
-  posChecker();
+
+  UtilityScheduler();
 }
 
 void
@@ -122,36 +127,61 @@ Producer::StopApplication()
 }
 
 void
-Producer::posChecker() {
+Producer::UtilityScheduler() {
   for (uint32_t i = 1; i < m_simEnd; i++) {
-    Simulator::Schedule(Seconds(i), &Producer::posCheckerHelper, this);
+    Simulator::Schedule(Seconds(i), &Producer::UtilityLoop, this);
   }
 }
 
-void Producer::posCheckerHelper() {
-  // Keeps track of content trigger position, speed and lifetime
-  double current_x = GetNode()->GetObject<MobilityModel>()->GetPosition().x;
-  double error = 2.0;
-  // std::cout << "current_x=" << current_x << " m_contentTrigger_x_speed=" << m_contentTrigger_x_speed << " m_contentTrigger_x_start=" << m_contentTrigger_x_start << " m_contentTrigger_x_end=" << m_contentTrigger_x_end << '\n';
-  if (current_x >= (m_contentTrigger_x_start - error) && current_x < (m_contentTrigger_x_end + error)) {
-    //Check if contentTrigger is alive
-    double currentTime = Simulator::Now().GetSeconds();
-    if (m_contentTrigger_l_start <= currentTime && m_contentTrigger_l_end > currentTime) {
+void Producer::UtilityLoop() {
+  bool matching = false;
+  nfd::cs::Cs& contentStore = GetNode()->GetObject<L3Protocol>()->getForwarder()->getCs();
+
+  nfd::cs::Cs::const_iterator iter;
+  for (iter = contentStore.begin(); iter != contentStore.end(); iter++) {
+      if (iter->getName().equals("/criticalData/test")) {
+          matching = true;
+      }
+  }
+
+  if (m_isRSU) {
+    if (g_rsusCanDist) {
       m_contentDiscovered = true;
-    } else {
+      // std::cout << "RSU node_(" << GetNode()->GetId() << ") has sensed content on the RSU net" << '\n';
+    }
+    else if (matching) {
+      // std::cout << "g_rsusCanDist = " << g_rsusCanDist << '\n';
+      // std::cout << "RSU node_(" << GetNode()->GetId() << ") has sniffed content" << '\n';
+      m_contentDiscovered = true;
+      g_rsusCanDist = true;
+    }
+    else {
       m_contentDiscovered = false;
     }
-  } else {
-    m_contentDiscovered = false;
+  }
+
+  if (!m_isRSU) {
+    matching ? (m_contentDiscovered = true) : (m_contentDiscovered = false);
+    double current_x = GetNode()->GetObject<MobilityModel>()->GetPosition().x;
+    double error = 2.0;
+    // Check node is within the Content Trigger
+    bool isNodeInContentTrigger = (current_x >= (m_contentTrigger_x_start - error)) && (current_x < (m_contentTrigger_x_end + error));
+    if (!m_contentDiscovered && isNodeInContentTrigger) {
+      //Check if contentTrigger is alive
+      double currentTime = Simulator::Now().GetSeconds();
+      bool isContentTriggerActive = (m_contentTrigger_l_start <= currentTime && m_contentTrigger_l_end > currentTime);
+      isContentTriggerActive ? (m_contentDiscovered = true) : (m_contentDiscovered = false);
+    }
   }
   m_contentTrigger_x_start = m_contentTrigger_x_start + m_contentTrigger_x_speed;
+  m_contentTrigger_x_end = m_contentTrigger_x_end + m_contentTrigger_x_speed;
 }
 
 void
 Producer::OnInterest(shared_ptr<const Interest> interest)
 {
   if (m_contentDiscovered) {
-      NS_LOG_UNCOND("\nMUUUUUPPPPPPPP");
+      // NS_LOG_UNCOND("Producer::OnInterest()");
       App::OnInterest(interest); // tracing inside
 
       NS_LOG_FUNCTION(this << interest);
@@ -181,16 +211,20 @@ Producer::OnInterest(shared_ptr<const Interest> interest)
 
       data->setSignature(signature);
 
-      NS_LOG_INFO("node(" << GetNode()->GetId() << ") responding with Data: " << data->getName());
+      NS_LOG_DEBUG("node(" << GetNode()->GetId() << ") responding with Data: " << data->getName());
 
       // to create real wire encoding
       data->wireEncode();
+
+      shared_ptr<Interest> interest = std::make_shared<ndn::Interest>(m_prefix);
+      Ptr<UniformRandomVariable> rand = CreateObject<UniformRandomVariable>();
+      interest->setNonce(rand->GetValue(0, std::numeric_limits<uint32_t>::max()));
+      interest->setInterestLifetime(ndn::time::seconds(300));
 
       m_transmittedDatas(data, this, m_face);
       m_appLink->onReceiveData(*data);
   }
 }
-
 
 } // namespace ndn
 } // namespace ns3
