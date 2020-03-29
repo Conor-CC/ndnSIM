@@ -47,11 +47,6 @@ public:
 
   ProactiveProducer();
 
-  virtual void
-  posChecker();
-
-  virtual void
-  ProactivelyDistributeData();
 
 protected:
   // inherited from Application base class.
@@ -63,7 +58,13 @@ protected:
 
 private:
   virtual void
-  posCheckerHelper();
+  UtilityScheduler();
+
+  virtual void
+  UtilityLoop();
+
+  virtual void
+  ProactivelyDistributeData();
 
   Name m_prefix;
   Name m_postfix;

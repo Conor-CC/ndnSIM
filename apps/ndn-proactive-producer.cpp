@@ -108,10 +108,10 @@ void
 ProactiveProducer::StartApplication()
 {
   NS_LOG_FUNCTION_NOARGS();
+
   App::StartApplication();
-  //TODO: emmit data based on factors originally described in proposal
-  //This scheduling of transmission is purely for testing purposes
-  ProactiveProducer::posChecker();
+
+  ProactiveProducer::UtilityScheduler();
 }
 
 void
@@ -203,13 +203,12 @@ ProactiveProducer::ProactivelyDistributeData() {
   // TODO: Make a new out-bound, non-local face so we dont have to rely on face 257
   // being a present
   shared_ptr<Face> face = GetNode()->GetObject<L3Protocol>()->getFaceById(257);
-  face->getScope();
-  std::cout << face->getScope() << '\n';
+  // std::cout << face->getScope() << '\n';
   // Kick-starts the distribution process. Should only be called if the data is definitely within
   // this nodes content store
   GetNode()->GetObject<L3Protocol>()->getForwarder()->startProcessInterest(*face, *interest);
 
-  NS_LOG_UNCOND("Emmiting PCD " << *data);
+  // NS_LOG_UNCOND("Emmiting PCD " << *data);
 }
 
 } // namespace ndn
