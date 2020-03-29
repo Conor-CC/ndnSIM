@@ -122,35 +122,46 @@ ProactiveProducer::StopApplication()
   App::StopApplication();
 }
 
-void ProactiveProducer::posChecker() {
+void ProactiveProducer::UtilityScheduler() {
   for (uint32_t i = 1; i < m_simEnd; i++) {
-    Simulator::Schedule(Seconds(i), &ProactiveProducer::posCheckerHelper, this);
+    Simulator::Schedule(Seconds(i), &ProactiveProducer::UtilityLoop, this);
   }
 }
 
-void ProactiveProducer::posCheckerHelper() {
+void ProactiveProducer::UtilityLoop() {
+  bool matching = false;
+  nfd::cs::Cs& contentStore = GetNode()->GetObject<L3Protocol>()->getForwarder()->getCs();
+
+  nfd::cs::Cs::const_iterator iter;
+  for (iter = contentStore.begin(); iter != contentStore.end(); iter++) {
+      if (iter->getName().equals("/criticalData/test")) {
+          matching = true;
+      }
+  }
+
   // Keeps track of content trigger position, speed and lifetime
   double current_x = GetNode()->GetObject<MobilityModel>()->GetPosition().x;
   double error = 2.0;
-  if (current_x >= (m_contentTrigger_x_start - error) && current_x < (m_contentTrigger_x_end + error)) {
+  bool isNodeInContentTrigger = (current_x >= (m_contentTrigger_x_start - error)) && (current_x < (m_contentTrigger_x_end + error));
+  // Check is node in contentTrigger area
+  if (isNodeInContentTrigger) {
     //Check if contentTrigger is alive
-    std::cout << "TEST" << '\n';
     double currentTime = Simulator::Now().GetSeconds();
     if (m_contentTrigger_l_start <= currentTime && m_contentTrigger_l_end > currentTime) {
       canDist = true;
     }
   }
-  if (canDist && !hasDist) {
+
+  if (canDist && !matching && !hasDist) {
     ProactivelyDistributeData();
     hasDist = true;
   }
   m_contentTrigger_x_start = m_contentTrigger_x_start + m_contentTrigger_x_speed;
+  m_contentTrigger_x_end = m_contentTrigger_x_end + m_contentTrigger_x_speed;
 }
 
 void
 ProactiveProducer::ProactivelyDistributeData() {
-  std::cout << "AAAAAAAAAAAAAA: " << GetNode()->GetObject<MobilityModel>()->GetPosition().x << std::endl;
-
   NS_LOG_UNCOND("ProactiveProducer::ProactivelyDistributeData()");
 
   if (!m_active)
